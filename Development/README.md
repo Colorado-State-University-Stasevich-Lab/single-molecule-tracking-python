@@ -1,2 +1,6 @@
 # single-molecule-tracking-python
-#### This code is for using Python to analyze single molecule tracking data derived from TrackMate 
+#### This folder contains data for testing the code
+
+Input data:     files produced from TrackMate
+
+Output data:    files produced from SMT python code
