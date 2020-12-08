@@ -1,2 +1,2 @@
 # single-molecule-tracking-python
-#### This code is for using Python to analyze single molecule tracking data derived from TrackMate 
+#### Python code to create and analyze a track array derived from a 3D video and a particle tracking file (e.g., from TrackMate)  
