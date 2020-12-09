@@ -8,7 +8,6 @@ Input data:
 
 Output data: files produced from SMT python code
 
-
 ## Installing packages
 
 To run the jupyter notebook, make sure you have teh following programs installed on your computer: 
@@ -28,6 +27,8 @@ https://www.anaconda.com/products/individual
 #### PyQt5 
 `pip install PyQt5`
 
+#### SciKit 
+`pip install -U numpy scipy scikit-learn`
 
 ## Running the code 
 In a command terminal, open jupyter notebook: 
