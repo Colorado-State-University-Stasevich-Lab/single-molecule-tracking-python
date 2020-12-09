@@ -37,4 +37,4 @@ In a command terminal, open jupyter notebook:
 When redirected to a the online interface, upload the python code: 
 * Download tracking code from this GitHub repository 
 * Upload it into the jupyter notebook web gui
-* *optional* Download additional input data files 
+* *optional:* Download additional input data files from this GitHub repository 
