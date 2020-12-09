@@ -16,12 +16,16 @@ To run the jupyter notebook, make sure you have teh following programs installed
 
 #### Python3 
 https://www.python.org/downloads/mac-osx/
+
 Make sure you have python3 installed: 
+
 `python --version`
+
 `Python 3.8.5`
 
 #### Anaconda for python3 
 `bash ~/Downloads/Anaconda3-2020.02-MacOSX-x86_64.sh` 
+
 https://www.anaconda.com/products/individual
 
 #### Upgrade pip 
@@ -43,4 +47,4 @@ In a command terminal, open jupyter notebook:
 When redirected to a the online interface, upload the python code: 
 * Download tracking code from this GitHub repository 
 * Upload it into the jupyter notebook web gui
-* *optional:* Download additional input data files from this GitHub repository 
+* *optional:* Download additional input data files from this GitHub repository if you wish to use them to test the code
