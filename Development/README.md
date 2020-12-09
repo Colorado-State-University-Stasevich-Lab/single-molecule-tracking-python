@@ -9,13 +9,19 @@ Input data:
 Output data: files produced from SMT python code
 
 ## Installing packages
+To run the jupyter notebook, make sure you have teh following programs installed on your computer.
 
-To run the jupyter notebook, make sure you have teh following programs installed on your computer: 
+
+### Mac OS : 
 
 #### Python3 
 https://www.python.org/downloads/mac-osx/
+Make sure you have python3 installed: 
+`python --version`
+`Python 3.8.5`
 
 #### Anaconda for python3 
+`bash ~/Downloads/Anaconda3-2020.02-MacOSX-x86_64.sh` 
 https://www.anaconda.com/products/individual
 
 #### Upgrade pip 
