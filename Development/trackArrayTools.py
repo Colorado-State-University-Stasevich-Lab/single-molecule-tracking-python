@@ -131,7 +131,7 @@ class TrackArray:
         else:
             return "Error: currently only support 1-3 color movies"
                  
-    def track_label(self):
+    def track_ID_markers(self):
         """Returns a dataframe whose values can be used to label N xT track arrays"""
         n_tracks = self.n_tracks()
         step = self.crop_dim()
@@ -220,6 +220,12 @@ class TrackArray:
         """Converts indexable N x T crops/mask to crops/mask array with dimensions (N x crop_pad) x Z"""
         temp = np.hstack(crops.swapaxes(2,4)).swapaxes(1,3)
         return np.hstack(temp.swapaxes(0,1)).swapaxes(1,2)
+
+    def array_to_crops(self, arr):
+        my_axis_t = list(arr.shape).index(self.n_frames()*self.crop_dim())  # to split array by time (column)
+        temp=np.array(np.split(arr,self.n_frames(),axis=my_axis_t)) 
+        my_axis_n = list(temp.shape).index(self.n_tracks()*self.crop_dim()) # to split array by track number (row)
+        return np.array(np.split(temp,self.n_tracks(), axis=my_axis_n))
     
     def to_color_mask(self,masks):
         """Adds n_channels to mask to make a color version"""
@@ -232,10 +238,10 @@ class TrackArray:
         color_mask = self.to_color_mask(mask_array)
         return np.amax(color_mask*self.arr,0) # multiply arrays and do max_z projection
     
-    def napari_viewer(self, arr, spatial_scale, **kwargs): #kwargs are optional arguments, in this case a possible layer or label
-        """View track array w/ napari. Spatial scale must be set. Optional: layer (e.g. mask), label (e.g. dataframe), and int_range"""
+    def napari_viewer(self, arr, spatial_scale, **kwargs): #kwargs are optional arguments, in this case a possible layer or markers
+        """View track array w/ napari. Spatial scale must be set. Optional: layer (e.g. mask), markers (e.g. dataframe), and int_range"""
         layer = kwargs.get('layer', np.array([]))
-        label = kwargs.get('label',pd.DataFrame(np.array([])))
+        markers = kwargs.get('markers', pd.DataFrame(np.array([])))
         int_range = kwargs.get('int_range', self.int_range(1,8)) # default range [mean -1 s.d, mean + 8 s.d]  
         my_image = np.moveaxis(arr,-1,0) # !!!only works if n_channels > 1 
         n_channels = self.n_channels()
@@ -246,8 +252,8 @@ class TrackArray:
             viewer.add_image(my_image[i], colormap=ch_colors[i],
                          name=ch_colors[i],blending="additive", scale=spatial_scale,
                          contrast_limits=int_range[i])
-        if label.values.any():  # check if a label was specified
-            viewer.add_tracks(label.values, tail_width = 7, tail_length=50, name="labels")
+        if markers.values.any():  # check if markers were specified
+            viewer.add_tracks(markers.values, name="TRACK_IDs")
         if layer.any():   # check if a layer was specified
             viewer.add_image(layer, colormap='gray',opacity=0.25,name='layer',blending="additive", scale=spatial_scale)
             
