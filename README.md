@@ -14,7 +14,6 @@ Output data: files produced from SMT python code
 ## Installing packages
 To run the jupyter notebook, make sure you have teh following programs installed on your computer.
 
-
 ### Mac OS : 
 
 #### Python3 
@@ -42,6 +41,25 @@ https://www.anaconda.com/products/individual
 
 #### SciKit 
 `pip install -U numpy scipy scikit-learn`
+
+
+### Another way to install packages using GUI
+
+#### Download and install the latest version of Anaconda
+    https://www.anaconda.com/products/individual
+
+#### Install Napari through Anaconda-Navigator
+    go to "environments"
+    add "conda-forge" into channels
+    select "Not installed"
+    type "Napari" in the search field
+    add Napari
+    
+#### Install PyQt5
+    Napari should run without installing PyQt5 (I think), but it will give a warning message about qt library version
+    you can remove this warning message by installing PyQt5 from Terminal (updating qt from Anaconda-Navigator did not work for me)
+      pip install PyQt5
+    Do not try to update all libraries from terminal (conda update --all). I got many problems after updating all libraries.
 
 ## Running the code 
 In a command terminal, open jupyter notebook: 
