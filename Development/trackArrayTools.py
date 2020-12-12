@@ -339,15 +339,18 @@ def create_track_array_video(video_directory, video_3D_filename, video_3D_tracks
     # Read in 3D video (.tif file) and tracks (.csv file)
     video_3D = imread(video_directory + video_3D_filename)
     tracks = pd.read_csv(video_directory + video_3D_tracks_filename) # Read in tracks are read in as "dataframes (df)"
-    # Get dimensions
-    n_frames = video_3D.shape[0]
-    z_slices = video_3D.shape[1]
-    height_y = video_3D.shape[2]
-    width_x = video_3D.shape[3]
-    if len(video_3D) == 4:     # check if just a single channel video
+    # Get dimensions...usually t, z, y, x, c. However, can be tricky if channels in a weird place. I assume
+    # the smallest dimension is channels and remove it. I then assum remaining is t,z,y,x.  
+    dims = list(video_3D.shape)
+    if len(dims) == 4:     # check if just a single channel video
         n_channels = 1
+        n_frames, z_slices, height_y, width_x = dims
     else:
-        n_channels = video_3D.shape[4]
+        n_channels = min(dims)
+        n_channels_index = dims.index(n_channels)   # find index of n_channels, which is assumed to be smallest dimension 
+        dims.remove(n_channels)    
+        video_3D = np.moveaxis(video_3D,n_channels_index,-1)  # move channels to last dimension of array (assumed by napari)
+        n_frames, z_slices, height_y, width_x = dims
     # Get unique tracks
     my_track_ids = tracks.TRACK_ID.unique()
     n_tracks = my_track_ids.size
