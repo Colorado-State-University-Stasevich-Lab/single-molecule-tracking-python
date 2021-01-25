@@ -645,6 +645,81 @@ def create_track_array_video(output_directory, output_filename, video_3D, tracks
             resolution=(1/xy_pixel_size,1/xy_pixel_size),  # store x and y resolution in pixels/nm
             metadata={'spacing':z_pixel_size,'unit':'nm'})  # store z spaxing in nm and set units to nm
     
+def create_particle_array_video(output_directory, output_filename, video_3D, particles, 
+                                crop_pad, xy_pixel_size, z_pixel_size,**kwargs):
+    """Creates and saves a particle array video at output_direction/output_filename from a 
+    3D tif video (video_3D) and corresponding particle array dataframe (particles). crop_pad is 
+    the effective radius of crops in the generated particle array. xy_pixel_size and z_pixel_size 
+    are included to generate an imagej tif file with metadata containing the resolution of 
+    the image. An optional argument, homography, is a homography matrix that shifts red 
+    (channel 0) pixels so they align with other channels. This will correct for shifts in red 
+    and green channels."""
+    # Get homography matrix; default is identity matrix
+    homography = kwargs.get('homography', np.eye(3))
+    homographies = [homography]
+    # Get dimensions...usually t, z, y, x, c. However, can be tricky if channels in a weird place. I assume
+    # the smallest dimension is channels and remove it. I then assum remaining is t,z,y,x.  
+    dims = list(video_3D.shape)
+    if len(dims) == 4:     # check if just a single channel video
+        n_channels = 1
+        n_frames, z_slices, height_y, width_x = dims
+    else:
+        n_channels = min(dims)
+        n_channels_index = dims.index(n_channels)   # find index of n_channels, which is assumed to be smallest dimension 
+        dims.remove(n_channels)    
+        video_3D = np.moveaxis(video_3D,n_channels_index,-1)  # move channels to last dimension of array (assumed by napari)
+        n_frames, z_slices, height_y, width_x = dims
+        
+    # Special for particle arrays:
+    my_particle_ids = particles.TRACK_ID.unique()
+    particles_time = particles.groupby('POSITION_T')
+    my_times = np.array([i for i in particles_time.groups.keys()])
+    n_particles_per_frame = np.array([len(particles_time.groups[i]) for i in my_times])
+    n_particles_max = np.max(n_particles_per_frame)
+    
+    # Create empty array to hold track array video
+    my_crops_all = np.zeros((n_particles_max,n_frames,z_slices,2*crop_pad+1,2*crop_pad+1,n_channels))
+    
+# Assign each crop to empty array defined above
+    my_t = 0
+    for t in my_times:
+        # make sure the 3D crop will not extend beyond the boundaries of the original 3D image
+        my_col = particles[(particles['POSITION_T'] == t) & (particles['POSITION_X']<width_x-crop_pad-1) 
+                & (particles['POSITION_X']>crop_pad+1) & (particles['POSITION_Y']<height_y-crop_pad-1) & (particles['POSITION_Y']>crop_pad+1) ]
+        my_IDs = my_col['ID'].values.astype(int) 
+        my_x = np.zeros((n_channels, my_col['POSITION_X'].size))
+        my_y = np.zeros((n_channels, my_col['POSITION_Y'].size))
+        # use the homography to correct channels 1 and 2 (assumed channel 0 is red channel)
+        for ch in np.arange(len(homographies)+1):
+            if ch == 0:  # don't correct channel 0
+                my_x[ch] = my_col['POSITION_X'].round(0).values.astype(int)
+                my_y[ch] = my_col['POSITION_Y'].round(0).values.astype(int)
+            else:   # correct other channels using same homography (since green/blue are image on same camera)
+                temp = [list(np.dot(homographies[ch-1],np.array([pos[0],pos[1],1]))[0:2]) 
+                        for pos in my_col[['POSITION_X','POSITION_Y']].values]
+                my_x[ch], my_y[ch] = np.array(temp).T
+                my_x[ch] = my_x[ch].round(0)
+                my_y[ch] = my_y[ch].round(0)
+        for i in np.arange(len(my_IDs)):
+            for ch in np.arange(n_channels):
+                # create all 3D crops in track array using corrected x and y values:
+                my_crops_all[i,my_t,:,:,:,ch] = video_3D[my_t,:,
+                        my_y[ch,i].astype(int)-crop_pad:my_y[ch,i].astype(int)+crop_pad+1,
+                        my_x[ch,i].astype(int)-crop_pad:my_x[ch,i].astype(int)+crop_pad+1,ch]
+        my_t = my_t + 1
+
+    # stack all crops into an array shape:
+    my_crops_all = np.hstack(my_crops_all.swapaxes(2,4)).swapaxes(1,3) # stack in one dimension
+    my_crops_all = np.hstack(my_crops_all).swapaxes(1,2) # stack in the other dimension
+    my_crops_all = np.moveaxis(my_crops_all.astype(np.int16),-1,1)   # move channels dim from the end to second for imagej 
+
+    # save to file
+    io.imsave(output_directory + output_filename,
+            my_crops_all, imagej=True,
+            resolution=(1/xy_pixel_size,1/xy_pixel_size),  # store x and y resolution in pixels/nm
+            metadata={'spacing':z_pixel_size,'unit':'nm'})  # store z spaxing in nm and set units to nm
+    
+    
 def concat_crop_array_vids(ca_vids):
     """
     Returns a single, large crop array video made up from a vertical stack of the inputted crop array videos 
