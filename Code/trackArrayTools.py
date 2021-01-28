@@ -686,7 +686,8 @@ def create_particle_array_video(output_directory, output_filename, video_3D, par
         # make sure the 3D crop will not extend beyond the boundaries of the original 3D image
         my_col = particles[(particles['POSITION_T'] == t) & (particles['POSITION_X']<width_x-crop_pad-1) 
                 & (particles['POSITION_X']>crop_pad+1) & (particles['POSITION_Y']<height_y-crop_pad-1) & (particles['POSITION_Y']>crop_pad+1) ]
-        my_IDs = my_col['ID'].values.astype(int) 
+        my_IDs = my_col['TRACK_ID'].values.astype(int) 
+        #my_IDs = my_col['ID'].values.astype(int) 
         my_x = np.zeros((n_channels, my_col['POSITION_X'].size))
         my_y = np.zeros((n_channels, my_col['POSITION_Y'].size))
         # use the homography to correct channels 1 and 2 (assumed channel 0 is red channel)
