@@ -207,7 +207,7 @@ class TrackArray:
         Returns mean intensity within mask region of the inputted crop.
         """
         myaxis =tuple(np.arange(len(crop.shape))[0:-1]) # Axis for summing mean (channels not included)
-        return np.mean(np.ma.masked_equal(crop*mask,0),axis=myaxis).data # mean, not summing over channel
+        return np.mean(np.ma.masked_equal(crop*mask,0),axis=myaxis).data # mean, ignoring zeros and not summing over channel
     
     def best_z_mask(self, rz, ref_ch, **kwargs):
         """Using image in ref_ch, returns mask for track array with best z +/- rz = 1, else 0.
@@ -423,10 +423,10 @@ class TrackArray:
         n_dim = len(arr.shape)
         signal=self.array_to_crops(mask)*self.array_to_crops(arr)
         if n_dim == 4:
-            output = np.mean(signal,axis=(2,3,4))
+            output = np.mean(np.ma.masked_equal(signal,0),axis=(2,3,4))  # Find mean, ignoring zeros
         elif n_dim ==3:
-            output = np.mean(signal,axis=(2,3))
-        return output
+            output = np.mean(np.ma.masked_equal(signal,0.),axis=(2,3))   # Find mean, ignoring zeros
+        return output.data
 
     def napari_viewer_old(self, arr, spatial_scale, **kwargs): #kwargs are optional arguments, in this case a possible layer or markers
         """View track array w/ napari. Spatial scale must be set. Optional: layer (e.g. mask), markers (e.g. dataframe), and int_range"""
@@ -687,20 +687,19 @@ def create_particle_array_video(output_directory, output_filename, video_3D, par
         my_col = particles[(particles['POSITION_T'] == t) & (particles['POSITION_X']<width_x-crop_pad-1) 
                 & (particles['POSITION_X']>crop_pad+1) & (particles['POSITION_Y']<height_y-crop_pad-1) & (particles['POSITION_Y']>crop_pad+1) ]
         my_IDs = my_col['TRACK_ID'].values.astype(int) 
-        #my_IDs = my_col['ID'].values.astype(int) 
         my_x = np.zeros((n_channels, my_col['POSITION_X'].size))
         my_y = np.zeros((n_channels, my_col['POSITION_Y'].size))
-        # use the homography to correct channels 1 and 2 (assumed channel 0 is red channel)
-        for ch in np.arange(len(homographies)+1):
+        # use the homography to correct channels 1 and 2 (assumed channel 0 is red channel)        
+        for ch in np.arange(n_channels):
             if ch == 0:  # don't correct channel 0
                 my_x[ch] = my_col['POSITION_X'].round(0).values.astype(int)
                 my_y[ch] = my_col['POSITION_Y'].round(0).values.astype(int)
             else:   # correct other channels using same homography (since green/blue are image on same camera)
-                temp = [list(np.dot(homographies[ch-1],np.array([pos[0],pos[1],1]))[0:2]) 
+                temp = [list(np.dot(homography,np.array([pos[0],pos[1],1]))[0:2]) 
                         for pos in my_col[['POSITION_X','POSITION_Y']].values]
                 my_x[ch], my_y[ch] = np.array(temp).T
-                my_x[ch] = my_x[ch].round(0)
-                my_y[ch] = my_y[ch].round(0)
+                my_x[ch] = my_x[ch].round(0).astype(int)
+                my_y[ch] = my_y[ch].round(0).astype(int)
         for i in np.arange(len(my_IDs)):
             for ch in np.arange(n_channels):
                 # create all 3D crops in track array using corrected x and y values:
@@ -774,8 +773,7 @@ def napari_viewer(arr, spatial_scale, **kwargs): #kwargs are optional arguments,
 
 def my_mean_intensity_plot(int, **kwargs):
     """
-    Plot mean track intensity (averaging columns) from track array. Optional arguments: channels = [0,1,..], xlim = [xmin, xmax], 
-    ylim = [ymin, ymax], colors = ['red', 'green', ...], markers = ['o','s','v', ...], labels = ['ch1', 'ch2', ...], renorm = False,
+    Plot mean track intensity (averaging columns) from track array intensities. Optional arguments: channels = [0,1,..], xlim = [xmin,xmax],     ylim = [ymin, ymax], colors = ['red', 'green', ...], markers = ['o','s','v', ...], labels = ['ch1', 'ch2', ...], renorm = False,
     filename = 'filename.svg', style = 'seaborn-whitegrid', aspect_ratio = default, error = 'sd' (or 'sem'). 
     Notes: (1) If renorm = True, plots are renormalized to one at first timepoint 
     """
