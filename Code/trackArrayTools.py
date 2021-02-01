@@ -170,22 +170,77 @@ class TrackArray:
                 crops[n,t] = self.arr[:,n*crop_dim:n*crop_dim+crop_dim,t*crop_dim:t*crop_dim+crop_dim] 
         return crops
     
-    def crops_to_array(self, crops):
+    def crops_to_array_old2(self, crops):
+        """Converts indexable N x T crops/masks to crops/mask array with dimensions (N x crop_pad) x (T x crop_pad) x Z"""
+        n_dim = len(crops.shape) # Figure if 6D crop array (N,T,Z,Y,X,C) or 5D projection (N,T,Y,X,C)
+        if n_dim == 6:
+            temp = crops.swapaxes(2,4)       #2 N    T      X       Y    Z   C
+            temp0 = np.hstack(temp)          #3 T   (NxX)   Y       Z        C   
+            temp1 = temp0.swapaxes(1,3)      #4 T    Z      Y     (NxX)      C  
+            output = np.hstack(temp1)        #5 Z   (TxY)  (NxX)             C
+        if n_dim == 5:
+            output = np.hstack(np.hstack(crops))  
+        return output
+    
+    def crops_to_array_old(self, crops):
         """Converts indexable N x T crops/masks to crops/mask array with dimensions (N x crop_pad) x (T x crop_pad) x Z"""
         n_dim = len(crops.shape) # Figure if 6D crop array (N,T,Z,Y,X,C) or 5D projection (N,T,Y,X,C)
         if n_dim == 6:
             temp = np.hstack(crops.swapaxes(2,4)).swapaxes(1,3)  # Stacking by N and then by T
             output = np.hstack(temp).swapaxes(1,2)       
         if n_dim == 5:
-            output = np.hstack(np.hstack(crops))
+            output = np.hstack(np.hstack(crops.swapaxes(2,3)))  # swap axis so X and Y are not transposed
         return output
 
     def crops_to_array_NxZ(self, crops): 
         """Converts indexable N x T crops/mask to crops/mask array with dimensions (N x crop_pad) x Z"""
         temp = np.hstack(crops.swapaxes(2,4)).swapaxes(1,3)  # moves Z before stacking
         return np.hstack(temp.swapaxes(0,1)).swapaxes(1,2)  
-            
-    def array_to_crops(self, arr): 
+
+    def crops_to_array(self,crops):
+        """Returns indexable N x T crops from track array."""
+        n_tracks = crops.shape[0]
+        n_frames = crops.shape[1]
+        n_channels = crops.shape[-1]
+        crop_dim = crops.shape[-2]
+        array_width = n_frames * crop_dim
+        array_height = n_tracks * crop_dim
+        n_dim = len(crops.shape)
+        if n_dim == 6:
+            z_slices = crops.shape[2]
+            output_arr = np.zeros((z_slices, array_height,array_width,n_channels))
+        if n_dim == 5:
+            output_arr = np.zeros((array_height,array_width,n_channels))
+        for n in np.arange(n_tracks):
+            for t in np.arange(n_frames):
+                if n_dim == 6:
+                    output_arr[:,n*crop_dim:n*crop_dim+crop_dim,t*crop_dim:t*crop_dim+crop_dim] = crops[n,t]
+                if n_dim == 5:
+                    output_arr[n*crop_dim:n*crop_dim+crop_dim,t*crop_dim:t*crop_dim+crop_dim] = crops[n,t]
+        return output_arr
+    
+    def array_to_crops(self,arr,crop_dim):
+        """Returns indexable N x T crops from track array."""
+        n_channels = arr.shape[-1]
+        array_width = arr.shape[-2]
+        array_height = arr.shape[-3]
+        n_tracks = int(array_height/crop_dim)
+        n_frames = int(array_width/crop_dim)
+        n_dim = len(arr.shape)
+        if n_dim == 4:
+            z_slices = arr.shape[-4]
+            output_crops = np.zeros((n_tracks, n_frames, z_slices, crop_dim, crop_dim ,n_channels))
+        if n_dim == 3:
+            output_crops = np.zeros((n_tracks, n_frames, crop_dim, crop_dim, n_channels))
+        for n in np.arange(n_tracks):
+            for t in np.arange(n_frames):
+                if n_dim == 4:
+                    output_crops[n,t] = arr[:,n*crop_dim:n*crop_dim+crop_dim,t*crop_dim:t*crop_dim+crop_dim]
+                if n_dim == 3:
+                    output_crops[n,t] = arr[n*crop_dim:n*crop_dim+crop_dim,t*crop_dim:t*crop_dim+crop_dim]
+        return output_crops    
+    
+    def array_to_crops_old(self, arr): 
         """
         Converts a crop array to indexable N x T crops. 
         """
@@ -349,29 +404,39 @@ class TrackArray:
         n_channels = self.n_channels()
         return np.moveaxis(np.asarray([masks]*n_channels),0,-1)  # Copy mask for each channel and reorder so channels dimension is last 
     
+    def mask_projection_old(self, crop_array, mask_array): 
+        """Performs max-z projection after applying mask_array to inputted crop_array"""
+        temp = np.amax(mask_array*crop_array,axis=0) # problem: should mask zeros when doing max_z projection over z(axis = 0)
+                                                                          # otherwise, can end up w/ zeros rather than negative values 
+                                                                          # after background subtracting 
+        return temp  # set masked zeros back to zero (these are empty parts of array)
+
     def mask_projection(self, crop_array, mask_array): 
         """Performs max-z projection after applying mask_array to inputted crop_array"""
-        return np.amax(mask_array*crop_array,0) # multiply arrays and do max_z projection
-
+        minimum = np.min(crop_array)  # find minimum value...can be negative if bg-subtracted crop
+        temp = crop_array - minimum   # subtract minimum value so everything is greater or equal to zero (only zero at minimum)
+        temp2 = temp*mask_array # now multiply by mask..giving zeros only in mask, positive values elsewhere
+        return np.amax(temp2,axis=0) + minimum  # max projection and then add min again to get back original intensities
+    
     def local_background_subtract(self, crop_array, mask_array):  ### !!! would be nice to work on something other than self.arr
         """Returns crops after subtracting the background signal measured in masks)
         """
-        crops = self.array_to_crops(crop_array) # convert to indexable format w/ dims (N,T,Z,Y,X,C) 
-        masks = self.array_to_crops(mask_array) # convert to indexable format w/ dims (N,T,Z,Y,X,C)
+        crops = self.array_to_crops(crop_array,self.crop_dim()) # convert to indexable format w/ dims (N,T,Z,Y,X,C) 
+        masks = self.array_to_crops(mask_array,self.crop_dim()) # convert to indexable format w/ dims (N,T,Z,Y,X,C)
         n_tracks = self.n_tracks()
         n_frames = self.n_frames()
         n_channels = self.n_channels()
         n_dim = len(crops.shape)
-        output = crops
+        output = np.zeros(crops.shape)
         for n in np.arange(n_tracks):
             for t in np.arange(n_frames):
-                cur_crop_3D = output[n,t] 
-                background = self.background_in_mask(cur_crop_3D,masks[n,t])
+                cur_crop_3D = crops[n,t] 
+                background = self.background_in_mask(crops[n,t],masks[n,t])
                 for ch in np.arange(n_channels):
                     if n_dim == 6:
-                        output[n,t,:,:,:,ch] = cur_crop_3D[:,:,:,ch] - background[ch] # !!! Doesn't work for single channel image
+                        output[n,t,:,:,:,ch] = crops[n,t,:,:,:,ch] - background[ch] # !!! Doesn't work for single channel image
                     if n_dim == 5:
-                        output[n,t,:,:,ch] = cur_crop_3D[:,:,ch] - background[ch]
+                        output[n,t,:,:,ch] = crops[n,t,:,:,ch] - background[ch]
         return self.crops_to_array(output)
    
     def local_background_subtract_old(self, masks):  ### !!! would be nice to work on something other than self.arr
@@ -397,7 +462,7 @@ class TrackArray:
         """
         Returns a n-frame moving average of the orginal crop_array. Final frames for which the moving average cannot be computed are set to zero.
         """
-        crops = self.array_to_crops(crop_array)
+        crops = self.array_to_crops(crop_array,self.crop_dim())
         crops_ma = crops*0
         for i in np.arange(crops.shape[1]-n):
             crops_ma[:,i] = np.mean(crops[:,i:i+n],axis=1)
@@ -421,7 +486,7 @@ class TrackArray:
         Returns an array of mean intensities in arr within the mask. mask and arr should be 3D (NTZYXC) crop arrays or 2D (NTYXC) crop array. 
         """
         n_dim = len(arr.shape)
-        signal=self.array_to_crops(mask)*self.array_to_crops(arr)
+        signal=self.array_to_crops(mask,self.crop_dim())*self.array_to_crops(arr,self.crop_dim())
         if n_dim == 4:
             output = np.mean(np.ma.masked_equal(signal,0),axis=(2,3,4))  # Find mean, ignoring zeros
         elif n_dim ==3:
@@ -684,8 +749,9 @@ def create_particle_array_video(output_directory, output_filename, video_3D, par
     my_t = 0
     for t in my_times:
         # make sure the 3D crop will not extend beyond the boundaries of the original 3D image
-        my_col = particles[(particles['POSITION_T'] == t) & (particles['POSITION_X']<width_x-crop_pad-1) 
-                & (particles['POSITION_X']>crop_pad+1) & (particles['POSITION_Y']<height_y-crop_pad-1) & (particles['POSITION_Y']>crop_pad+1) ]
+        # I add another 2 pixels too, just in case the homography registration doesn't push points in one color off the image.
+        my_col = particles[(particles['POSITION_T'] == t) & (particles['POSITION_X']<width_x-crop_pad-5) 
+                & (particles['POSITION_X']>crop_pad+5) & (particles['POSITION_Y']<height_y-crop_pad-5) & (particles['POSITION_Y']>crop_pad+5) ]
         my_IDs = my_col['TRACK_ID'].values.astype(int) 
         my_x = np.zeros((n_channels, my_col['POSITION_X'].size))
         my_y = np.zeros((n_channels, my_col['POSITION_Y'].size))
@@ -699,7 +765,7 @@ def create_particle_array_video(output_directory, output_filename, video_3D, par
                         for pos in my_col[['POSITION_X','POSITION_Y']].values]
                 my_x[ch], my_y[ch] = np.array(temp).T
                 my_x[ch] = my_x[ch].round(0).astype(int)
-                my_y[ch] = my_y[ch].round(0).astype(int)
+                my_y[ch] = my_y[ch].round(0).astype(int) 
         for i in np.arange(len(my_IDs)):
             for ch in np.arange(n_channels):
                 # create all 3D crops in track array using corrected x and y values:
