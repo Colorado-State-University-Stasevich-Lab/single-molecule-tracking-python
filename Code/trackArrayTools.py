@@ -219,8 +219,9 @@ class TrackArray:
                     output_arr[n*crop_dim:n*crop_dim+crop_dim,t*crop_dim:t*crop_dim+crop_dim] = crops[n,t]
         return output_arr
     
-    def array_to_crops(self,arr,crop_dim):
+    def array_to_crops(self,arr):
         """Returns indexable N x T crops from track array."""
+        crop_dim = self.crop_dim()
         n_channels = arr.shape[-1]
         array_width = arr.shape[-2]
         array_height = arr.shape[-3]
@@ -421,8 +422,8 @@ class TrackArray:
     def local_background_subtract(self, crop_array, mask_array):  ### !!! would be nice to work on something other than self.arr
         """Returns crops after subtracting the background signal measured in masks)
         """
-        crops = self.array_to_crops(crop_array,self.crop_dim()) # convert to indexable format w/ dims (N,T,Z,Y,X,C) 
-        masks = self.array_to_crops(mask_array,self.crop_dim()) # convert to indexable format w/ dims (N,T,Z,Y,X,C)
+        crops = self.array_to_crops(crop_array) # convert to indexable format w/ dims (N,T,Z,Y,X,C) 
+        masks = self.array_to_crops(mask_array) # convert to indexable format w/ dims (N,T,Z,Y,X,C)
         n_tracks = self.n_tracks()
         n_frames = self.n_frames()
         n_channels = self.n_channels()
@@ -462,7 +463,7 @@ class TrackArray:
         """
         Returns a n-frame moving average of the orginal crop_array. Final frames for which the moving average cannot be computed are set to zero.
         """
-        crops = self.array_to_crops(crop_array,self.crop_dim())
+        crops = self.array_to_crops(crop_array)
         crops_ma = crops*0
         for i in np.arange(crops.shape[1]-n):
             crops_ma[:,i] = np.mean(crops[:,i:i+n],axis=1)
@@ -486,13 +487,61 @@ class TrackArray:
         Returns an array of mean intensities in arr within the mask. mask and arr should be 3D (NTZYXC) crop arrays or 2D (NTYXC) crop array. 
         """
         n_dim = len(arr.shape)
-        signal=self.array_to_crops(mask,self.crop_dim())*self.array_to_crops(arr,self.crop_dim())
+        signal=self.array_to_crops(mask)*self.array_to_crops(arr)
         if n_dim == 4:
             output = np.mean(np.ma.masked_equal(signal,0),axis=(2,3,4))  # Find mean, ignoring zeros
         elif n_dim ==3:
             output = np.mean(np.ma.masked_equal(signal,0.),axis=(2,3))   # Find mean, ignoring zeros
         return output.data
 
+    def measure_intensity_in_mask_df(self, arr0, mask, **kwargs):
+        '''
+        Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] 
+        (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to 
+        measure time such that start_frame corresponds to t=0; (3) dt = 1 (default) is the time between frames in minutes; 
+        (4) file_number = 0 (default) corresponds to number of file in a filelist the crop array belongs to; 
+        (5) replicate_number = 0 (default) corresponds to the replicate number of the file in the crop array list;
+        (6) exp_number = 0 (defaul) corresponds to the type of experiment (eg. control would have different number)
+        '''
+        # get the optional arguments
+        renorm_frames = kwargs.get('renorm_frames', [0,1])
+        start_frame =  kwargs.get('start_frame', 0)
+        dt = kwargs.get('dt', 1)   
+        file_number = kwargs.get('file_number', 0)   
+        replicate_number = kwargs.get('replicate_number', 0)   
+        exp_number = kwargs.get('exp_number', 0)   
+
+        # measured intensities in mask as a numpy array
+        arr = self.int_in_mask(arr0,mask) 
+
+        # convert intensity measurements in numpy array to a dataframe 
+        norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1],:],0),axis=(0,1)) # intensity renorm. factors
+        arr_df = np.zeros((np.prod(arr.shape),11)) # set up an empty array to hold dataframe columns
+        row = 0  # counter for keeping track of rows in dataframe
+        crop_id = 0  # counter to keep track of crops in array irrespective of the color channel 
+        for n in np.arange(arr.shape[0]):
+            for f in np.arange(arr.shape[1]):
+                for c in np.arange(arr.shape[2]):             # COLUMNS OF DATAFRAME:
+                    arr_df[row,0] = exp_number                # type of experiment (e.g. exp. vs. control)
+                    arr_df[row,1] = replicate_number          # replicate number in list
+                    arr_df[row,2] = file_number               # file number in list
+                    arr_df[row,3] = crop_id                   # id for crop  
+                    arr_df[row,4] = n                         # crop row in array 
+                    arr_df[row,5] = f                         # frame
+                    arr_df[row,6] = c                         # channel
+                    arr_df[row,7] = f*dt                      # time (assumed in minutes)
+                    arr_df[row,8] = (f-start_frame)*dt        # time after harringtonine
+                    arr_df[row,9] = arr[n,f,c]                # disk intensity (assumes donut already subtracted)
+                    arr_df[row,10] = arr[n,f,c]/norm[c]        # renormalized intensity to ~1 at beginning
+                    row = row + 1
+                crop_id = crop_id + 1
+        # Create dataframe:
+        df=pd.DataFrame(arr_df, columns = ['Expt.', 'Rep.','File #','Crop ID','Crop row','Frame','Channel',
+                                              'Original time (min)','Time (min)','Intensity (a.u.)','Renorm. Int. (a.u.)'])
+        df_filt = df[df['Intensity (a.u.)']!=0]  # filter out zeros (which should only correspond to empty crops)
+
+        return df_filt
+    
     def napari_viewer_old(self, arr, spatial_scale, **kwargs): #kwargs are optional arguments, in this case a possible layer or markers
         """View track array w/ napari. Spatial scale must be set. Optional: layer (e.g. mask), markers (e.g. dataframe), and int_range"""
         layer = kwargs.get('layer', np.array([]))
@@ -853,7 +902,7 @@ def my_mean_intensity_plot(int, **kwargs):
     colors = kwargs.get('colors', ['tab:red', 'tab:green', 'tab:blue','tab:orange','tab:purple'])
     markers = kwargs.get('markers', ['o','s','v','^','d'])
     labels = kwargs.get('labels', ['ch1','ch2','ch3','ch4','ch5'])
-    renorm = kwargs.get('renorm', False)
+    renorm = kwargs.get('renorm', [0,0])
     filename = kwargs.get('filename', 'none')
     style = kwargs.get('style', 'seaborn-whitegrid')
     aspect_ratio = kwargs.get('aspect_ratio',0)
@@ -887,19 +936,19 @@ def my_mean_intensity_plot(int, **kwargs):
         my_int[ch] = np.mean(int_c[ch],axis=0)
         my_sd[ch] = np.std(int_c[ch],axis=0)
         my_sem[ch] = np.std(int_c[ch],axis=0)/np.sqrt(int.shape[0])
-        my_int_renorm[ch] = my_int[ch]/my_int[ch,0]
-        my_sd_renorm[ch] = my_sd[ch]/my_int[ch,0]
-        my_sem_renorm[ch] = my_sem[ch]/my_int[ch,0]
         if error == 'sem':
             yerror = my_sem[ch]
             yerror_renorm = my_sem_renorm[ch]
         else:
             yerror = my_sd[ch]
             yerror_renorm = my_sd_renorm[ch]
-        if renorm == False:
+        if renorm == [0,0]:
             ax.plot(t, my_int[ch], color=colors[ch_index], marker=markers[ch_index],label=labels[ch_index])
             ax.errorbar(t,my_int[ch],yerr=yerror,color=colors[ch_index],capsize=3)
-        elif renorm == True: 
+        elif renorm != [0,0]: 
+            my_int_renorm[ch] = my_int[ch]/np.mean(my_int[ch,renorm[0]:renorm[1]])
+            my_sd_renorm[ch] = my_sd[ch]/np.mean(my_int[ch,renorm[0]:renorm[1]])
+            my_sem_renorm[ch] = my_sem[ch]/np.mean(my_int[ch,renorm[0]:renorm[1]])
             ax.plot(t, my_int_renorm[ch], color=colors[ch_index], marker=markers[ch_index],label=labels[ch_index])
             ax.errorbar(t,my_int_renorm[ch],yerr=yerror_renorm[ch],color=colors[ch_index],capsize=3)            
         ch_index = ch_index + 1
@@ -919,9 +968,9 @@ def my_mean_intensity_plot(int, **kwargs):
             str1 = 'Mean Int. Ch ' + str(channels[0]) + ' (' + labels[0] + '; a.u.)'
             str2 = 'SD of Int. Ch ' + str(channels[0]) + ' (' + labels[0] + '; a.u.)'
             str3 = 'SEM of Int. Ch ' + str(channels[0]) + ' (' + labels[0] + '; a.u.)'
-            if renorm == False:
+            if renorm != [0,0]:
                 dfout=pd.DataFrame({str1:my_int[channels[0]],str2:my_sd[channels[0]],str3:my_sem[channels[0]]})
-            elif renorm == True:
+            elif renorm == [0,0]:
                 dfout=pd.DataFrame({str1:my_int_renorm[channels[0]],
                                     str2:my_sd_renorm[channels[0]],str3:my_sem_renorm[channels[0]]})
         if len(channels) == 2:
@@ -931,10 +980,10 @@ def my_mean_intensity_plot(int, **kwargs):
             str4 = 'Mean Int. Ch ' + str(channels[1]) + ' (' + labels[1] + '; a.u.)'
             str5 = 'SD of Int. Ch ' + str(channels[1]) + ' (' + labels[1] + '; a.u.)'
             str6 = 'SEM of Int. Ch ' + str(channels[1]) + ' (' + labels[1] + '; a.u.)'
-            if renorm == False:
+            if renorm != [0,0]:
                 dfout=pd.DataFrame({str1:my_int[channels[0]],str2:my_sd[channels[0]],str3:my_sem[channels[0]],
                                 str4:my_int[channels[1]],str5:my_sd[channels[1]],str6:my_sem[channels[1]]})
-            elif renorm == True:
+            elif renorm == [0,0]:
                 dfout=pd.DataFrame({str1:my_int_renorm[channels[0]],str2:my_sd_renorm[channels[0]],str3:my_sem_renorm[channels[0]],
                                 str4:my_int_renorm[channels[1]],str5:my_sd_renorm[channels[1]],str6:my_sem_renorm[channels[1]]})                
         if len(channels) == 3:
@@ -947,11 +996,11 @@ def my_mean_intensity_plot(int, **kwargs):
             str7 = 'Mean Int. Ch ' + str(channels[2]) + ' (' + labels[2] + '; a.u.)'
             str8 = 'SD of Int. Ch ' + str(channels[2]) + ' (' + labels[2] + '; a.u.)'
             str9 = 'SEM of Int. Ch ' + str(channels[2]) + ' (' + labels[2] + '; a.u.)'
-            if renorm == False:
+            if renorm != [0,0]:
                 dfout=pd.DataFrame({str1:my_int[channels[0]],str2:my_sd[channels[0]],str3:my_sem[channels[0]],
                                 str4:my_int[channels[1]],str5:my_sd[channels[1]],str6:my_sem[channels[1]],
                                 str7:my_int[channels[2]],str8:my_sd[channels[2]],str9:my_sem[channels[2]]})
-            elif renorm == True:
+            elif renorm == [0,0]:
                 dfout=pd.DataFrame({str1:my_int_renorm[channels[0]],str2:my_sd_renorm[channels[0]],str3:my_sem_renorm[channels[0]],
                     str4:my_int_renorm[channels[1]],str5:my_sd_renorm[channels[1]],str6:my_sem_renorm[channels[1]],
                     str7:my_int_renorm[channels[2]],str8:my_sd_renorm[channels[2]],str9:my_sem_renorm[channels[2]]})
