@@ -36,6 +36,8 @@ from sys import executable, argv
 from subprocess import check_output
 from PyQt5.QtWidgets import QFileDialog, QApplication
 
+# For signal auto- and cross-correlation
+from scipy import signal
 
 ##### CLASSES
 class TrackArray:
@@ -468,19 +470,28 @@ class TrackArray:
         for i in np.arange(crops.shape[1]-n):
             crops_ma[:,i] = np.mean(crops[:,i:i+n],axis=1)
         return self.crops_to_array(crops_ma)
-    
-    def int_renorm_by_row(self, arr, n_sd, top_int):   
+
+    def int_renorm_by_row(self, arr, n_sd, top_int):  
         """
         Returns a crop array in which the intensity in each row is renormlized such that an intensity that is n 
         standard deviations beyond the median is set equal to top_int (keeping zero unchanged). 
         """
-        # Number of rows:
-        n_rows = self.crops().shape[0]
-        crop_dim = self.crop_dim()
-        out_arr = np.zeros(arr.shape)
-        for i in np.arange(0,n_rows*crop_dim,crop_dim):    
-            out_arr[:,i:i+crop_dim] = int_renorm(arr[:,i:i+crop_dim], n_sd, top_int) #renormalize each crop array row
-        return out_arr
+        crops = self.array_to_crops(arr)
+        out_arr_crops = np.zeros(crops.shape)  
+        for i in np.arange(0,crops.shape[0],1):    
+            out_arr_crops[i] = int_renorm(crops[i], n_sd, top_int) #renormalize each crop array row
+        return self.crops_to_array(out_arr_crops)
+ 
+    def int_renorm_by_col(self, arr, n_sd, top_int):    ## This is renorm by column!!!! Should do this using crops!!
+        """
+        Returns a crop array in which the intensity in each row is renormlized such that an intensity that is n 
+        standard deviations beyond the median is set equal to top_int (keeping zero unchanged). 
+        """
+        crops = self.array_to_crops(arr)
+        out_arr_crops = np.zeros(crops.shape)  
+        for i in np.arange(0,crops.shape[1],1):    
+            out_arr_crops[:,i] = int_renorm(crops[:,i], n_sd, top_int) #renormalize each crop array row
+        return self.crops_to_array(out_arr_crops)
     
     def int_in_mask(self, arr, mask):
         """
@@ -494,7 +505,64 @@ class TrackArray:
             output = np.mean(np.ma.masked_equal(signal,0.),axis=(2,3))   # Find mean, ignoring zeros
         return output.data
 
-    def measure_intensity_in_mask_df(self, arr0, mask, **kwargs):
+    def measure_intensity_in_mask_df(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
+        '''
+Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to measure time such that start_frame corresponds to t=0; (3) dt = 1 (default) is the time between frames in minutes; (4) file = 0 (default) # or string corresponding to file in a filelist the crop array belongs to; (5) replicate = 0 (default) # or string corresponding to the replicate number of the file in the crop array list; (6) exp = 0 (defaul) # or string corresponding to the type of experiment (eg. control would have different number);(7) ch_names = list of channels names (default: 'Int. Ch. 1 (a.u.)'...)
+        '''
+        n_channels = self.n_channels()
+        # get the optional arguments
+        renorm_frames = kwargs.get('renorm_frames', [0,1])
+        start_frame =  kwargs.get('start_frame', 0)
+        dt = kwargs.get('dt', 1)   
+        file = kwargs.get('file', 0)   
+        replicate = kwargs.get('replicate', 0)   
+        exp = kwargs.get('exp', 0)   
+        ch_names = kwargs.get('ch_names', ['Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)])
+        ch_names_2 = ['Renorm. '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_3 = ['% Change '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_full = ch_names + ch_names_2 +ch_names_3
+        
+        # measured intensities in mask as a numpy array
+        arr = self.int_in_mask(arr0,mask) 
+        
+        # convert intensity measurements in numpy array to a dataframe 
+
+        norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1]],0),axis=(0,1)) # renorm fact.
+#        print(norm)
+        arr_df = np.zeros((np.prod(arr.shape),4+3*n_channels)) # set up an empty array to hold dataframe columns
+        row = 0  # counter for keeping track of rows in dataframe
+        crop_id = 0  # counter to keep track of crops in array irrespective of the color channel 
+
+        for n in np.arange(arr.shape[0]):
+ #           mean =  np.mean(np.ma.masked_equal(arr[n,:],0),axis=0)
+ #           sd = np.std(np.ma.masked_equal(arr[n,:],0),axis=0)
+ #           norm = mean + 3*sd
+            quant95 = np.quantile(np.ma.masked_equal(arr[n,:],0),0.95,axis=0) # normalization factor 95%
+ #           quant05 = np.quantile(np.ma.masked_equal(arr[n,:],0),0.05,axis=0)
+ #          norm 
+ #           print(quant95)
+            for f in np.arange(arr.shape[1]):                 # COLUMNS OF DATAFRAME:
+ #                   norm = np.mean(np.ma.masked_equal(arr[n,renorm_frames[0]:renorm_frames[1]],0),axis=0)/quant95
+                    arr_df[row,0] = n                         # crop row in array 
+                    arr_df[row,1] = f                         # frame
+                    arr_df[row,2] = f*dt                      # time (assumed in minutes)
+                    arr_df[row,3] = (f-start_frame)*dt        # time after harringtonine
+                    arr_df[row,4:4+n_channels] = arr[n,f]     # Intensity in all channels
+                    arr_df[row,4+n_channels:4+2*n_channels] = (arr[n,f])/(norm) # Renormalized 
+                    arr_df[row,4+2*n_channels:4+3*n_channels] = (arr[n,f])/(quant95)/norm # Renormalized 
+                    row = row + 1
+        # Create dataframe:
+ 
+        columns = ['Crop Row','Frame','Original time (min)','Time (min)']
+        columns = columns + ch_names_full
+        df=pd.DataFrame(arr_df, columns = columns)
+        df_filt = df[df[ch_names[0]]!=False]  # filter out the empty crops without particles
+        df_filt['Expt.'] = exp
+        df_filt['Rep.'] = replicate
+        df_filt['File'] = file
+        return df_filt
+    
+    def measure_intensity_in_mask_df_old(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
         '''
         Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] 
         (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to 
@@ -513,34 +581,39 @@ class TrackArray:
 
         # measured intensities in mask as a numpy array
         arr = self.int_in_mask(arr0,mask) 
-
+        n_channels = arr.shape[2] #!!! won't work on full 4D array
+        
         # convert intensity measurements in numpy array to a dataframe 
+
         norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1],:],0),axis=(0,1)) # intensity renorm. factors
-        arr_df = np.zeros((np.prod(arr.shape),11)) # set up an empty array to hold dataframe columns
+        arr_df = np.zeros((np.prod(arr.shape),7+n_channels+n_channels)) # set up an empty array to hold dataframe columns
         row = 0  # counter for keeping track of rows in dataframe
         crop_id = 0  # counter to keep track of crops in array irrespective of the color channel 
+
         for n in np.arange(arr.shape[0]):
-            for f in np.arange(arr.shape[1]):
-                for c in np.arange(arr.shape[2]):             # COLUMNS OF DATAFRAME:
+            for f in np.arange(arr.shape[1]):                 # COLUMNS OF DATAFRAME:
+             
                     arr_df[row,0] = exp_number                # type of experiment (e.g. exp. vs. control)
                     arr_df[row,1] = replicate_number          # replicate number in list
                     arr_df[row,2] = file_number               # file number in list
-                    arr_df[row,3] = crop_id                   # id for crop  
-                    arr_df[row,4] = n                         # crop row in array 
-                    arr_df[row,5] = f                         # frame
-                    arr_df[row,6] = c                         # channel
-                    arr_df[row,7] = f*dt                      # time (assumed in minutes)
-                    arr_df[row,8] = (f-start_frame)*dt        # time after harringtonine
-                    arr_df[row,9] = arr[n,f,c]                # disk intensity (assumes donut already subtracted)
-                    arr_df[row,10] = arr[n,f,c]/norm[c]        # renormalized intensity to ~1 at beginning
+                    arr_df[row,3] = n                         # crop row in array 
+                    arr_df[row,4] = f                         # frame
+                    arr_df[row,5] = f*dt                      # time (assumed in minutes)
+                    arr_df[row,6] = (f-start_frame)*dt        # time after harringtonine
+                    arr_df[row,7:7+n_channels] = arr[n,f]     # Intensity in all channels
+                    arr_df[row,7+n_channels:] = arr[n,f]/norm # Renormalized Intensity in all channels
                     row = row + 1
-                crop_id = crop_id + 1
         # Create dataframe:
-        df=pd.DataFrame(arr_df, columns = ['Expt.', 'Rep.','File #','Crop ID','Crop row','Frame','Channel',
-                                              'Original time (min)','Time (min)','Intensity (a.u.)','Renorm. Int. (a.u.)'])
-        df_filt = df[df['Intensity (a.u.)']!=0]  # filter out zeros (which should only correspond to empty crops)
+        columns7upA = ['Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)]
+        columns7upB = ['Renorm. Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)]
+        columns = ['Expt.', 'Rep.','File #','Crop Row','Frame',
+                                              'Original time (min)','Time (min)']
+        columns = columns + columns7upA + columns7upB
+        df=pd.DataFrame(arr_df, columns = columns)
+        df_filt = df[df['Int. Ch. 1 (a.u.)']!=False]  # filter out the empty crops without particles
 
         return df_filt
+    
     
     def napari_viewer_old(self, arr, spatial_scale, **kwargs): #kwargs are optional arguments, in this case a possible layer or markers
         """View track array w/ napari. Spatial scale must be set. Optional: layer (e.g. mask), markers (e.g. dataframe), and int_range"""
@@ -560,7 +633,186 @@ class TrackArray:
             viewer.add_tracks(markers.values, name="TRACK_IDs")
         if layer.any():   # check if a layer was specified
             viewer.add_image(layer, colormap='gray',opacity=0.25,name='layer',blending="additive", scale=spatial_scale)
+
             
+    def find_intensity_runs(self, df, col_name, **kwargs):
+        '''
+Finds intensity runs in track array. Inputs: (1) df is a intensity measurement dataframe,  e.g. output from measure_intensity_in_mask_df function; (2) col_name is a string that specifies the column name in df in which to search for runs, e.g. 'Int. Ch. 1 (a.u.)'; (3) th (default 0) is an optional argument that specifies the intensity threshhold for finding runs. Runs will correspond to a series of repeated intensity measurments above the threshhold value; (4) gap = n (default 0) is an optional argument specifying the largest # of frames in a gap between runs. Sequential runs that are separated by n frames or fewer will be merged into a single run; (5) expt (default 0) is an optional string or number specifying the experiment corresponding to dataframe.
+        '''
+        # Required parameters:
+        mydf = df
+        delta_ts = self.df[(self.df['FRAMES']==1)]['POSITION_T_REAL'].values #!!! Change to POSITION_T
+        gap = kwargs.get('gap', 0) 
+        threshhold = kwargs.get('th', 0) 
+        expt = kwargs.get('expt', 0) 
+
+        # Find all runs above designated threshhold and put into dataframe
+        all_runs = []  # list to hold runs
+        rows = mydf['Crop Row'].unique()  # All track array rows with measurements in dataframe
+        for i in rows:
+            mydat = mydf[(mydf['Crop Row']==i)][col_name].values # get intensity data
+            run_list = runs_above_threshhold(mydat,threshhold)      # get list of runs
+            all_runs.append(merge_runs(run_list,gap))                        # append to run_list
+        n_runs = len(flatten(all_runs))                                    # number of runs found
+#        print(all_runs)
+        # Set up array to hold all runs and make a sensible dataframe
+        run_arr = np.zeros([n_runs,10])                                 # set up array to hold data
+        run_id = 0                                                      # run counter
+        for i in np.arange(len(all_runs)):                              # for each row
+            maxt = mydf[mydf['Crop Row']==i]['Frame'].unique().max()  # find max time to see if right censored
+            for j in np.arange(len(all_runs[i])):                       # select each run
+                start = all_runs[i][j][0]                               # run start time
+                stop  = all_runs[i][j][1] - 1                           # run stop time; the minus one because in form: [start, stop)
+                if start == 0:        
+                    left_censored = True                                # L censor if start from zero
+                else:
+                    left_censored = False        
+                if stop == maxt:            
+                    right_censored = True                               # R censor if stop = maxt
+                else:
+                    right_censored = False        
+                run_arr[run_id,0] = run_id                              # column 1: run id
+                run_arr[run_id,1] = i                                   # column 2: row of run in track array
+                run_arr[run_id,2] = threshhold                          # column 4: int threshhold to find runs
+                run_arr[run_id,3] = delta_ts[i]                         # column 5: run dt to get actual times
+                run_arr[run_id,4] = start                               # column 6: run start frame
+                run_arr[run_id,5] = stop                                # column 7: run stop frame
+                run_arr[run_id,6] = stop - start                        # column 8: run frame length
+                run_arr[run_id,7] = maxt                                # column 9: max possible run length
+                run_arr[run_id,8] = left_censored                       # column 10: left censored?
+                run_arr[run_id,9] = right_censored                      # column 11: right censored?
+                run_id = run_id + 1                                     # go on to next run
+
+        # Now set up dataframe        
+        run_columns = ['Run ID', 'Crop Row', 'Run Threshhold', 'Run dt','Run Start Frame', 
+                       'Run End Frame', 'Run Length', 'Run Max Length', 'Left Censored?', 'Right Censored?']
+        df_runs = pd.DataFrame(run_arr, columns = run_columns)
+        df_runs['Run Channel'] = col_name
+        df_runs['Expt.'] = expt
+
+        return df_runs            
+
+    def make_run_layer(self, run_df, **kwargs):
+        '''
+        Highlights regions of track array that correspond to runs annotated in run_df (which is a dataframe that is the output 
+        of the find_intensity_runs command. ch (default 0) is an optional argument taht specifies the channel the layer corresponds
+        to. 
+        '''
+        n_tracks = self.n_tracks()
+        crops = self.crops()
+        my_crop_layer = np.zeros(crops.shape)  # make a layer to mark the runs
+        my_crop_layer_c = np.moveaxis(my_crop_layer, -1, 0)
+        n_channels = self.n_channels()
+        ch = kwargs.get('ch', 0) 
+        for i in np.arange(n_tracks):
+            start_frames = run_df[run_df['Crop Row']==i]['Run Start Frame'].values.astype('int')
+            end_frames = run_df[run_df['Crop Row']==i]['Run End Frame'].values.astype('int')
+            for j in np.arange(len(start_frames)):
+                for channel in np.arange(n_channels):
+                    if channel == ch - 1:
+                        my_crop_layer_c[channel, i,start_frames[j]:end_frames[j]] = 1
+        return self.crops_to_array(np.moveaxis(my_crop_layer_c,0,-1))    
+ 
+    def binned_array(self, arr, dts, n_decimals):
+        """
+Bins columns in a crop array so that rows so they correspond to the same time (within n_decimals). This is useful when different rows were acquired at a different frame rate. Input: (1) crop array to correct; (2) dts is a list of the times between frames, e.g. [100, 100, ...], where 100 would  correspond to time between columns in 1st row, 88 between columns in second row, ...; (2) n_decimals = (...-2, -1, 0, 1, 2, ...) correponds to the number of decimals to consider two times equivalent, e.g. -2 would consider t = 123 and t = 100 to both be t = 100. If a row has more than one column element that corresponds to the same time, all but one of the equivalent columns will be eliminated. 
+        """
+        my_crops = self.array_to_crops(arr)
+        my_binned_crops = np.zeros(my_crops.shape)
+        n_tracks = self.n_tracks()
+        n_frames = self.n_frames()
+        n_decimals = -2  
+        for n_row in np.arange(n_tracks):
+            my_list = np.round(dts[n_row]*np.arange(n_frames),n_decimals).tolist()
+            del_list = find_duplicates(my_list)
+            my_row = self.array_to_crops(arr)[n_row]
+            zeros_to_append = np.zeros((len(del_list),)+my_row[0].shape)
+            del_row = np.delete(my_row,del_list,axis=0)
+            del_append_row = np.concatenate((del_row,zeros_to_append))
+            my_binned_crops[n_row] = del_append_row 
+        my_binned_array = self.crops_to_array(my_binned_crops)
+        return my_binned_array
+            
+    def plot_array_avg_row(self, arr,**kwargs):
+        """
+Returns a max-z projected single row crop array that represents the average row of arr. Optional arguments: (1) xlim = [start,stop] is a list that specifies the what frame to start and stop; (2) dx is the frame step size; (3) fig_size is a tuple that specifies the dimensions of the output image, e.g. (3.5,1); (4) int_range is a list of pairs that specify intensity limits, e.g. for a 2-channel image int_range = [[0,1000],[0,1000]]; (5) out_file is the name of the output .png output file to which image is saved.
+        """
+        # basic parameters
+        n_channels = self.n_channels()
+
+        xlim = kwargs.get('xlim', [0,self.n_frames()])
+        dx = kwargs.get('dx', 1)
+        fig_size = kwargs.get('fig_size',(3.5,1))
+        int_range = kwargs.get('int_range',[[0,64000] for c in np.arange(n_channels)])
+        out_file = kwargs.get('out_file','test.png')
+
+        # make avg row
+        my_arr = np.ma.masked_equal(self.array_to_crops(arr),0)  # convert to N x T crops and mask zeros
+        my_avg_arr = self.crops_to_array(np.mean(my_arr[:,xlim[0]:xlim[1]:dx],axis=0))   # take column mean; covert back to crop array  
+        my_avg_row = np.transpose(my_avg_arr,(1,0,2))       # transpose so shows up as a single row
+
+        #Now make figure
+        f, axes = plt.subplots(n_channels+1,1,figsize=fig_size)  # Create n_channel subplots (nchannel+1)x1 grid
+        c=axes.flatten()
+        for ch in np.arange(n_channels):
+            c[ch].imshow(np.clip(my_avg_row[:,:,ch],int_range[ch][0],int_range[ch][1]), cmap="gray")
+            c[ch].set_axis_off()
+        merge = np.moveaxis([np.clip(my_avg_row[:,:,ch],int_range[ch][0],
+                    int_range[ch][1])/(int_range[ch][1]-int_range[ch][0]) for ch in np.arange(n_channels)],0,-1)
+        c[-1].imshow((merge))  # Expects intensities between 0 and 1
+        c[-1].set_axis_off()
+        plt.savefig(out_file, format = 'png', dpi=300)
+
+    def plot_array(self, arr, **kwargs):
+        """
+        Plots a crop array that represents the average row of arr. Optional arguments: (1) xlim = [start, stop] is a list that specifies the what frame to start and stop; (2) dx is the frame step size; (3) fig_size is a tuple that specifies the dimensions of the output image, e.g. (3.5,1); (4) int_range is a list of pairs that specify intensity limits, e.g. for a 2-channel image int_range = [[0,1000],[0,1000]]; (5) out_file is the name of the output .png output file to which image is saved. 
+
+        """
+        # basic parameters
+        n_channels = self.n_channels()
+
+        xlim = kwargs.get('xlim', [0,self.n_frames()])
+        dx = kwargs.get('dx', 1)
+        fig_size = kwargs.get('fig_size',(3.5,1))
+        int_range = kwargs.get('int_range',[[0,64000] for c in np.arange(n_channels)])
+        out_file = kwargs.get('out_file','test.png')
+
+        # make avg row
+        my_crop = self.array_to_crops(np.max(arr,axis=0)) # take max z-projection and convert to N x T crops and mask zeros
+        my_arr = self.crops_to_array(my_crop[:,xlim[0]:xlim[1]:dx])   # !!! Need to update to do max projection  
+
+        #Now make figure
+        f, axes = plt.subplots(n_channels+1,1,figsize=fig_size)  # Create n_channel subplots (nchannel+1)x1 grid
+        c=axes.flatten()
+        for ch in np.arange(n_channels):
+            c[ch].imshow(np.clip(my_arr[:,:,ch],int_range[ch][0],int_range[ch][1]), cmap="gray")
+            c[ch].set_axis_off()
+        merge = np.moveaxis([np.clip(my_arr[:,:,ch],int_range[ch][0],
+                    int_range[ch][1])/(int_range[ch][1]-int_range[ch][0]) for ch in np.arange(n_channels)],0,-1)
+        c[-1].imshow((merge))  # Expects intensities between 0 and 1
+        c[-1].set_axis_off()
+        plt.savefig(out_file, format = 'png', dpi=300)
+
+    def plot_array_row(self, arr, n_row, **kwargs):
+        """
+        Plots a single row from a crop array that represents the average row of arr. Optional arguments: (1) xlim = [start, stop] is a list that specifies the what frame to start and stop; (2) dx is the frame step size; (3) fig_size is a tuple that specifies the dimensions of the output image, e.g. (3.5,1); (4) int_range is a list of pairs that specify intensity limits, e.g. for a 2-channel image int_range = [[0,1000],[0,1000]]; (5) out_file is the name of the output .png output file to which image is saved. !!! Need to do max projection!
+
+        """
+        # basic parameters
+        n_channels = self.n_channels()
+
+        xlim = kwargs.get('xlim', [0,self.n_frames()])
+        dx = kwargs.get('dx', 1)
+        fig_size = kwargs.get('fig_size',(3.5,1))
+        int_range = kwargs.get('int_range',[[0,64000] for c in np.arange(n_channels)])
+        out_file = kwargs.get('out_file','test.png')
+
+        my_crop = self.array_to_crops(self.moving_avg(arr,2))[n_row]
+        my_row = np.swapaxes(np.array([self.crops_to_array(my_crop)]),1,2)
+        self.plot_array(my_row,xlim=xlim,dx=dx,fig_size=fig_size,
+                    int_range=int_range,out_file=out_file)
+
+        
     def find_translating_spots(self, intensities, int_threshhold, run_length):
         """Returns a list of track_ids in which translation above a threshhold intensity and 
         lasting longer than run_length is detected in intensity timeseries"""
@@ -648,8 +900,8 @@ def int_renorm(arr, n, top_int):
     arr_c = np.moveaxis(arr,-1,0) # put channels as first dimension
     arr_renorm = np.zeros(arr_c.shape)
     n_channels = len(arr_c) # number of color channels
-    my_mean = [np.mean(np.ma.masked_equal(arr_c[ch],0)) for ch in np.arange(n_channels)]
-    my_std = [np.std(np.ma.masked_equal(arr_c[ch],0)) for ch in np.arange(n_channels)]
+    my_mean = [np.mean(np.ma.masked_equal(arr_c[ch],-10000000)) for ch in np.arange(n_channels)]
+    my_std = [np.std(np.ma.masked_equal(arr_c[ch],-10000000)) for ch in np.arange(n_channels)]
     # Renormalize so bin corresponding to n standard deviations beyond mean is renormalized 
     #to top_int (keeping zero unchanged):
     for ch in np.arange(n_channels):
@@ -883,7 +1135,80 @@ def napari_viewer(arr, spatial_scale, **kwargs): #kwargs are optional arguments,
             viewer.add_image(layer[i], colormap=ch_colors[i],opacity=0.25,name='layer',blending="additive", scale=spatial_scale) 
             
 
+def runs_above_threshhold(list,th):
+    '''
+    Returns a new list with 0 for elements in list above threshold and -1 otherwise.
+    '''
+    return zero_runs(np.where(list > th, 0, -1)) 
 
+def zero_runs(list):  # from link
+    '''
+    Returns intervals of zero_runs. Eg. list = [0,0,1,1,4,0,0,0] --> [[0,2],[5,8]]
+    '''
+    iszero = np.concatenate(([0], np.equal(list, 0).view(np.int8), [0]))
+    absdiff = np.abs(np.diff(iszero))
+    ranges = np.where(absdiff == 1)[0].reshape(-1, 2)
+    return ranges.tolist()
+
+def merge_runs(run_list,gap):
+    '''
+    Merge runs (or intervals: [...[start1,stop1], [start2, stop2], ...]) that are seperated 
+    by gap or less (e.g. if start2 - stop1 <= gap merged interval is [start1, stop2]).
+    '''
+    i=0
+    runs = run_list[:]  # !!! Must copy list w/ this notation (or copy not really created)
+    while i < len(runs)-1:
+#        print(i,len(runs),runs)
+        start1, stop1 = runs[i]     # get run i
+        start2, stop2 = runs[i+1]   # get run i+1
+        if (start2 - stop1) <= gap:       #Close enough to merge? If so...
+            runs.remove([start1,stop1])   # remove run i
+            runs.remove([start2,stop2])   # remove run i+1
+            runs = sorted([[min(start1, start2),max(stop1, stop2)]] + runs)  # prepend merged run 
+        else:
+            i = i + 1
+    return runs
+
+def run_lengths(run_interval_list):
+    '''
+    Returns length of runs in run_interval_list = [[start1,stop1], [start2,stop2],...] -->
+    [stop1-start2, stop2-start2, ...]
+    '''
+    out = []
+    for i in range(len(run_interval_list)):
+        start, stop = run_interval_list[i]
+        out.append(stop-start)
+    return out
+
+def flatten(list):
+    '''
+    Flatten out a list.
+    '''
+    return [item for sublist in list for item in sublist]
+
+def find_duplicates(mylist):
+    '''
+    Find positions of duplicates in mylist that can be deleted.
+    '''
+    dups = []
+    for i in set(mylist):
+        if mylist.count(i) > 1:
+            for j in np.arange(mylist.count(i)-1):
+                dups.append(mylist.index(i)+j)
+    return dups
+
+def list_correlate(sig1, sig2,**kwargs):
+    """
+This calculates the correlation between two equal-length, 1D signals sig1 and sig2 based on Coulon et al, Methods Enzymology: https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6300985/pdf/nihms-1000605.pdf. Optional arguments: (1) mean1 is the global mean of sig1 (default mean1 = np.mean(sig1)); (2) mean2 is the global mean of sig2 (default mean2 = np.mean(sig2)).
+    """
+    mean1 = kwargs.get('mean1', np.mean(sig1))  # can use an optional global mean instead of a local mean
+    mean2 = kwargs.get('mean2', np.mean(sig2))
+    denominator = len(sig1) - np.absolute(np.arange(2*len(sig1)-1)-len(sig1)+1)
+    numerator = signal.correlate(sig1, sig2, method='direct')
+    cor = numerator/denominator/mean1/mean2 - 1
+    return cor
+
+           
 ##### BASIC FUNCTIONS FOR PLOTTING DATA
 
 def my_mean_intensity_plot(int, **kwargs):
