@@ -44,7 +44,7 @@ https://www.anaconda.com/products/individual
 
 
 #### SciKit 
-`pip install -U numpy scipy scikit-learn`
+`pip install -U scikit-learn`
 
 
 ### Another way to install packages using GUI
