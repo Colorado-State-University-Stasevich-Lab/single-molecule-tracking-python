@@ -30,6 +30,10 @@ Make sure you have python3 installed:
 
 https://www.anaconda.com/products/individual
 
+If you already have anaconda updated, make sure you have the latest version: 
+
+`conda update --all` 
+
 
 #### Upgrade pip 
 `pip install --upgrade pip`
