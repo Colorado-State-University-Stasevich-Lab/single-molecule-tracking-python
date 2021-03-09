@@ -468,19 +468,28 @@ class TrackArray:
         for i in np.arange(crops.shape[1]-n):
             crops_ma[:,i] = np.mean(crops[:,i:i+n],axis=1)
         return self.crops_to_array(crops_ma)
-    
-    def int_renorm_by_row(self, arr, n_sd, top_int):   
+
+    def int_renorm_by_row(self, arr, n_sd, top_int):  
         """
         Returns a crop array in which the intensity in each row is renormlized such that an intensity that is n 
         standard deviations beyond the median is set equal to top_int (keeping zero unchanged). 
         """
-        # Number of rows:
-        n_rows = self.crops().shape[0]
-        crop_dim = self.crop_dim()
-        out_arr = np.zeros(arr.shape)
-        for i in np.arange(0,n_rows*crop_dim,crop_dim):    
-            out_arr[:,i:i+crop_dim] = int_renorm(arr[:,i:i+crop_dim], n_sd, top_int) #renormalize each crop array row
-        return out_arr
+        crops = self.array_to_crops(arr)
+        out_arr_crops = np.zeros(crops.shape)  
+        for i in np.arange(0,crops.shape[0],1):    
+            out_arr_crops[i] = int_renorm(crops[i], n_sd, top_int) #renormalize each crop array row
+        return self.crops_to_array(out_arr_crops)
+ 
+    def int_renorm_by_col(self, arr, n_sd, top_int):    ## This is renorm by column!!!! Should do this using crops!!
+        """
+        Returns a crop array in which the intensity in each row is renormlized such that an intensity that is n 
+        standard deviations beyond the median is set equal to top_int (keeping zero unchanged). 
+        """
+        crops = self.array_to_crops(arr)
+        out_arr_crops = np.zeros(crops.shape)  
+        for i in np.arange(0,crops.shape[1],1):    
+            out_arr_crops[:,i] = int_renorm(crops[:,i], n_sd, top_int) #renormalize each crop array row
+        return self.crops_to_array(out_arr_crops)
     
     def int_in_mask(self, arr, mask):
         """
@@ -495,6 +504,60 @@ class TrackArray:
         return output.data
 
     def measure_intensity_in_mask_df(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
+        '''
+        Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] 
+        (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to 
+        measure time such that start_frame corresponds to t=0; (3) dt = 1 (default) is the time between frames in minutes; 
+        (4) file = 0 (default) # or string corresponding to file in a filelist the crop array belongs to; 
+        (5) replicate = 0 (default) # or string corresponding to the replicate number of the file in the crop array list;
+        (6) exp = 0 (defaul) # or string corresponding to the type of experiment (eg. control would have different number);
+        (7) ch_names = list of channels names (default: 'Int. Ch. 1 (a.u.)'...)
+        '''
+        n_channels = self.n_channels()
+        # get the optional arguments
+        renorm_frames = kwargs.get('renorm_frames', [0,1])
+        start_frame =  kwargs.get('start_frame', 0)
+        dt = kwargs.get('dt', 1)   
+        file = kwargs.get('file', 0)   
+        replicate = kwargs.get('replicate', 0)   
+        exp = kwargs.get('exp', 0)   
+        ch_names = kwargs.get('ch_names', ['Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)])
+        ch_names_2 = ['Renorm. '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_full = ch_names + ch_names_2
+        
+        # measured intensities in mask as a numpy array
+        arr = self.int_in_mask(arr0,mask) 
+        
+        # convert intensity measurements in numpy array to a dataframe 
+
+        norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1],:],0),axis=(0,1)) # intensity renorm. factors
+        arr_df = np.zeros((np.prod(arr.shape),4+n_channels+n_channels)) # set up an empty array to hold dataframe columns
+        row = 0  # counter for keeping track of rows in dataframe
+        crop_id = 0  # counter to keep track of crops in array irrespective of the color channel 
+
+        for n in np.arange(arr.shape[0]):
+            for f in np.arange(arr.shape[1]):                 # COLUMNS OF DATAFRAME:
+                    arr_df[row,0] = n                         # crop row in array 
+                    arr_df[row,1] = f                         # frame
+                    arr_df[row,2] = f*dt                      # time (assumed in minutes)
+                    arr_df[row,3] = (f-start_frame)*dt        # time after harringtonine
+                    arr_df[row,4:4+n_channels] = arr[n,f]     # Intensity in all channels
+                    arr_df[row,4+n_channels:] = arr[n,f]/norm # Renormalized Intensity in all channels
+                    row = row + 1
+        # Create dataframe:
+ 
+        columns = ['Crop row','Frame','Original time (min)','Time (min)']
+        columns = columns + ch_names_full
+        df=pd.DataFrame(arr_df, columns = columns)
+        df_filt = df[df[ch_names[0]]!=False]  # filter out the empty crops without particles
+        df_filt['Expt.'] = exp
+        df_filt['Rep.'] = replicate
+        df_filt['File'] = file
+        return df_filt
+    
+    
+    
+    def measure_intensity_in_mask_df_old(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
         '''
         Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] 
         (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to 
@@ -536,13 +599,13 @@ class TrackArray:
                     arr_df[row,7+n_channels:] = arr[n,f]/norm # Renormalized Intensity in all channels
                     row = row + 1
         # Create dataframe:
-        columns7upA = ['Int. Ch. ' + str(c) + ' (a.u.)' for c in np.arange(n_channels)]
-        columns7upB = ['Renorm. Int. Ch. ' + str(c) + ' (a.u.)' for c in np.arange(n_channels)]
+        columns7upA = ['Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)]
+        columns7upB = ['Renorm. Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)]
         columns = ['Expt.', 'Rep.','File #','Crop row','Frame',
                                               'Original time (min)','Time (min)']
         columns = columns + columns7upA + columns7upB
         df=pd.DataFrame(arr_df, columns = columns)
-        df_filt = df[df['Int. Ch. 0 (a.u.)']!=False]  # filter out the empty crops without particles
+        df_filt = df[df['Int. Ch. 1 (a.u.)']!=False]  # filter out the empty crops without particles
 
         return df_filt
     
@@ -652,8 +715,8 @@ def int_renorm(arr, n, top_int):
     arr_c = np.moveaxis(arr,-1,0) # put channels as first dimension
     arr_renorm = np.zeros(arr_c.shape)
     n_channels = len(arr_c) # number of color channels
-    my_mean = [np.mean(np.ma.masked_equal(arr_c[ch],0)) for ch in np.arange(n_channels)]
-    my_std = [np.std(np.ma.masked_equal(arr_c[ch],0)) for ch in np.arange(n_channels)]
+    my_mean = [np.mean(np.ma.masked_equal(arr_c[ch],-10000000)) for ch in np.arange(n_channels)]
+    my_std = [np.std(np.ma.masked_equal(arr_c[ch],-10000000)) for ch in np.arange(n_channels)]
     # Renormalize so bin corresponding to n standard deviations beyond mean is renormalized 
     #to top_int (keeping zero unchanged):
     for ch in np.arange(n_channels):

@@ -30,6 +30,10 @@ Make sure you have python3 installed:
 
 https://www.anaconda.com/products/individual
 
+If you already have anaconda updated, make sure you have the latest version: 
+
+`conda update --all` 
+
 
 #### Upgrade pip 
 `pip install --upgrade pip`
@@ -44,7 +48,7 @@ https://www.anaconda.com/products/individual
 
 
 #### SciKit 
-`pip install -U numpy scipy scikit-learn`
+`pip install -U scikit-learn`
 
 
 ### Another way to install packages using GUI
