@@ -493,43 +493,56 @@ class TrackArray:
             out_arr_crops[:,i] = int_renorm(crops[:,i], n_sd, top_int) #renormalize each crop array row
         return self.crops_to_array(out_arr_crops)
     
-    def int_in_mask(self, arr, mask):
+    def int_in_mask(self, arr, mask, **kwargs):
         """
-        Returns an array of mean intensities in arr within the mask. mask and arr should be 3D (NTZYXC) crop arrays or 2D (NTYXC) crop array. 
+        Returns an array of mean intensities in arr within the mask. mask and arr should be 3D (NTZYXC) crop arrays or 2D (NTYXC) crop array. Optional argument is ignore_val (default 0), which is an intensity value in the mask that will be ignored when computing means. 
         """
+        ignore_val =  kwargs.get('ignore_val', 0.) # By default, will ignore this value when computing means below
         n_dim = len(arr.shape)
         signal=self.array_to_crops(mask)*self.array_to_crops(arr)
         if n_dim == 4:
-            output = np.mean(np.ma.masked_equal(signal,0),axis=(2,3,4))  # Find mean, ignoring zeros
+            output = np.mean(np.ma.masked_equal(signal,ignore_val),axis=(2,3,4))  # Find mean, ignoring ignore_val (default is 0)
         elif n_dim ==3:
-            output = np.mean(np.ma.masked_equal(signal,0.),axis=(2,3))   # Find mean, ignoring zeros
+            output = np.mean(np.ma.masked_equal(signal,ignore_val),axis=(2,3))   # Find mean, ignoring ignore_val (default is 0)
         return output.data
 
-    def measure_intensity_in_mask_df(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
+    
+    def measure_intensity_in_mask_df_new(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
         '''
-Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to measure time such that start_frame corresponds to t=0; (3) dt = 1 (default) is the time between frames in minutes; (4) file = 0 (default) # or string corresponding to file in a filelist the crop array belongs to; (5) replicate = 0 (default) # or string corresponding to the replicate number of the file in the crop array list; (6) exp = 0 (defaul) # or string corresponding to the type of experiment (eg. control would have different number);(7) ch_names = list of channels names (default: 'Int. Ch. 1 (a.u.)'...)
+Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to measure time such that start_frame corresponds to t=0; (3) dt = 1 (default) is the time between frames in minutes; (4) file = 0 (default) # or string corresponding to file in a filelist the crop array belongs to; (5) replicate = 0 (default) # or string corresponding to the replicate number of the file in the crop array list; (6) exp = 0 (defaul) # or string corresponding to the type of experiment (eg. control would have different number);(7) ch_names = list of channels names (default: 'Int. Ch. 1 (a.u.)'...); (8) k_pb is a list of exponents for each channel that describe photobleaching in the experiment. If inputted, measured intensities for each channel I_measure are corrected such that I = I_measure/exp(-k_pb). The default values is k_pb = [0, 0, ...] (list of length n_channels), so no correction is performed for each channel. (9) ignore_val (default 0), which is an intensity value in the mask that will be ignored when computing means. (10) bg_frames = [0,0] (default) defines a range of frames that defines the background level for the HT curve. This background will be subtracted so HT curve goes to zero. Note the default does nothing by subtracting 0.
         '''
         n_channels = self.n_channels()
         # get the optional arguments
         renorm_frames = kwargs.get('renorm_frames', [0,1])
+        bg_frames = kwargs.get('bg_frames',[0,0])
         start_frame =  kwargs.get('start_frame', 0)
         dt = kwargs.get('dt', 1)   
         file = kwargs.get('file', 0)   
         replicate = kwargs.get('replicate', 0)   
         exp = kwargs.get('exp', 0)   
         ch_names = kwargs.get('ch_names', ['Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)])
+        ignore =  kwargs.get('ignore_val', 0.) # By default, will ignore this value when computing means below
         ch_names_2 = ['Renorm. '+ch_names[c] for c in np.arange(n_channels)]
-        ch_names_3 = ['% Change '+ch_names[c] for c in np.arange(n_channels)]
-        ch_names_full = ch_names + ch_names_2 +ch_names_3
+        ch_names_3 = ['Renorm by Row '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_4 = ['BG '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_full = ch_names + ch_names_2 +ch_names_3 + ch_names_4
+        k_pb_0 = kwargs.get('k_pb', [0 for c in np.arange(n_channels)])   
+        k_pb  = np.array(k_pb_0) # convert list to numpy array
         
         # measured intensities in mask as a numpy array
-        arr = self.int_in_mask(arr0,mask) 
+        arr = self.int_in_mask(arr0,mask,ignore_val = ignore) 
+#        print(arr.shape)
         
         # convert intensity measurements in numpy array to a dataframe 
+        norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1]],ignore),axis=(0,1)) # renorm fact.
+        print(norm)
 
-        norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1]],0),axis=(0,1)) # renorm fact.
-#        print(norm)
-        arr_df = np.zeros((np.prod(arr.shape),4+3*n_channels)) # set up an empty array to hold dataframe columns
+        if bg_frames != [0,0]:  # define background level, if desired
+            bg = np.mean(np.ma.masked_equal(arr[:,bg_frames[0]:bg_frames[1]],ignore),axis=(0,1)) # bg for renorm
+        else:
+            bg = 0
+#        print(bg)
+        arr_df = np.zeros((np.prod(arr.shape[0:2]),4+4*n_channels)) # set up an empty array to hold dataframe columns
         row = 0  # counter for keeping track of rows in dataframe
         crop_id = 0  # counter to keep track of crops in array irrespective of the color channel 
 
@@ -537,26 +550,89 @@ Returns a dataframe with intensities measured in mask for crop array arr. Option
  #           mean =  np.mean(np.ma.masked_equal(arr[n,:],0),axis=0)
  #           sd = np.std(np.ma.masked_equal(arr[n,:],0),axis=0)
  #           norm = mean + 3*sd
-            quant95 = np.quantile(np.ma.masked_equal(arr[n,:],0),0.95,axis=0) # normalization factor 95%
- #           quant05 = np.quantile(np.ma.masked_equal(arr[n,:],0),0.05,axis=0)
- #          norm 
- #           print(quant95)
+            quant_start = np.quantile(np.ma.masked_equal(arr[n,renorm_frames[0]:renorm_frames[1]],ignore),0.5,axis=0) # renorm factor   
             for f in np.arange(arr.shape[1]):                 # COLUMNS OF DATAFRAME:
  #                   norm = np.mean(np.ma.masked_equal(arr[n,renorm_frames[0]:renorm_frames[1]],0),axis=0)/quant95
                     arr_df[row,0] = n                         # crop row in array 
                     arr_df[row,1] = f                         # frame
                     arr_df[row,2] = f*dt                      # time (assumed in minutes)
                     arr_df[row,3] = (f-start_frame)*dt        # time after harringtonine
-                    arr_df[row,4:4+n_channels] = arr[n,f]     # Intensity in all channels
-                    arr_df[row,4+n_channels:4+2*n_channels] = (arr[n,f])/(norm) # Renormalized 
-                    arr_df[row,4+2*n_channels:4+3*n_channels] = (arr[n,f])/(quant95)/norm # Renormalized 
+                    arr_df[row,4:4+n_channels] = arr[n,f]/np.exp(-k_pb*(f-start_frame)*dt) # photobleach-corrected intensities
+                    arr_df[row,4+n_channels:4+2*n_channels] = ((arr[n,f]-bg)/np.exp(-k_pb*(f-start_frame)*dt))/(norm-bg) # Renormalized 
+                    arr_df[row,4+2*n_channels:4+3*n_channels] = (arr[n,f]/np.exp(-k_pb*(f-start_frame)*dt))/(quant_start) # Renormalized 
+                    arr_df[row,4+3*n_channels:4+4*n_channels] = bg/(norm-bg) # Renormalized 
                     row = row + 1
         # Create dataframe:
  
-        columns = ['Crop Row','Frame','Original time (min)','Time (min)']
+        columns = ['Crop Row','Frame','Original Time (min)','Time (min)']
         columns = columns + ch_names_full
         df=pd.DataFrame(arr_df, columns = columns)
-        df_filt = df[df[ch_names[0]]!=False]  # filter out the empty crops without particles
+        df_filt = df[df[ch_names[0]]!=ignore]  # filter out the empty crops without particles
+        df_filt['Expt.'] = exp
+        df_filt['Rep.'] = replicate
+        df_filt['File'] = file
+        return df_filt
+    
+    def measure_intensity_in_mask_df(self, arr0, mask, **kwargs):  # !!!Need to update for working on 3D images 
+        '''
+Returns a dataframe with intensities measured in mask for crop array arr. Optional arguments: (1) renorm_frames = [0,1] (default) is the range of frames to use when renormalizing intensity to; (2) start_frame = 0 (default) is used to measure time such that start_frame corresponds to t=0; (3) dt = 1 (default) is the time between frames in minutes; (4) file = 0 (default) # or string corresponding to file in a filelist the crop array belongs to; (5) replicate = 0 (default) # or string corresponding to the replicate number of the file in the crop array list; (6) exp = 0 (defaul) # or string corresponding to the type of experiment (eg. control would have different number);(7) ch_names = list of channels names (default: 'Int. Ch. 1 (a.u.)'...); (8) k_pb is a list of exponents for each channel that describe photobleaching in the experiment. If inputted, measured intensities for each channel I_measure are corrected such that I = I_measure/exp(-k_pb). The default values is k_pb = [0, 0, ...] (list of length n_channels), so no correction is performed for each channel. (9) ignore_val (default 0), which is an intensity value in the mask that will be ignored when computing means. (10) bg_frames = [0,0] (default) defines a range of frames that defines the background level for the HT curve. This background will be subtracted so HT curve goes to zero. Note the default does nothing by subtracting 0.
+        '''
+        n_channels = self.n_channels()
+        # get the optional arguments
+        renorm_frames = kwargs.get('renorm_frames', [0,1])
+        bg_frames = kwargs.get('bg_frames',[0,0])
+        start_frame =  kwargs.get('start_frame', 0)
+        dt = kwargs.get('dt', 1)   
+        file = kwargs.get('file', 0)   
+        replicate = kwargs.get('replicate', 0)   
+        exp = kwargs.get('exp', 0)   
+        ch_names = kwargs.get('ch_names', ['Int. Ch. ' + str(c+1) + ' (a.u.)' for c in np.arange(n_channels)])
+        ignore =  kwargs.get('ignore_val', 0.) # By default, will ignore this value when computing means below
+        ch_names_2 = ['Renorm. '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_3 = ['Renorm by Row '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_4 = ['BG '+ch_names[c] for c in np.arange(n_channels)]
+        ch_names_full = ch_names + ch_names_2 +ch_names_3 + ch_names_4
+        k_pb_0 = kwargs.get('k_pb', [0 for c in np.arange(n_channels)])   
+        k_pb  = np.array(k_pb_0) # convert list to numpy array
+        
+        # measured intensities in mask as a numpy array
+        arr = self.int_in_mask(arr0,mask,ignore_val = ignore) 
+#        print(arr.shape)
+        
+        # convert intensity measurements in numpy array to a dataframe 
+
+        norm = np.mean(np.ma.masked_equal(arr[:,renorm_frames[0]:renorm_frames[1]],ignore),axis=(0,1)) # renorm fact.
+        if bg_frames != [0,0]:  # define background level, if desired
+            bg = np.mean(np.ma.masked_equal(arr[:,bg_frames[0]:bg_frames[1]],ignore),axis=(0,1)) # bg for renorm
+        else:
+            bg = 0
+#        print(bg)
+        arr_df = np.zeros((np.prod(arr.shape[0:2]),4+4*n_channels)) # set up an empty array to hold dataframe columns
+        row = 0  # counter for keeping track of rows in dataframe
+        crop_id = 0  # counter to keep track of crops in array irrespective of the color channel 
+
+        for n in np.arange(arr.shape[0]):
+ #           mean =  np.mean(np.ma.masked_equal(arr[n,:],0),axis=0)
+ #           sd = np.std(np.ma.masked_equal(arr[n,:],0),axis=0)
+ #           norm = mean + 3*sd
+            quant_start = np.quantile(np.ma.masked_equal(arr[n,renorm_frames[0]:renorm_frames[1]],ignore),0.5,axis=0) # renorm factor   
+            for f in np.arange(arr.shape[1]):                 # COLUMNS OF DATAFRAME:
+ #                   norm = np.mean(np.ma.masked_equal(arr[n,renorm_frames[0]:renorm_frames[1]],0),axis=0)/quant95
+                    arr_df[row,0] = n                         # crop row in array 
+                    arr_df[row,1] = f                         # frame
+                    arr_df[row,2] = f*dt                      # time (assumed in minutes)
+                    arr_df[row,3] = (f-start_frame)*dt        # time after harringtonine
+                    arr_df[row,4:4+n_channels] = arr[n,f]/np.exp(-k_pb*(f-start_frame)*dt) # photobleach-corrected intensities
+                    arr_df[row,4+n_channels:4+2*n_channels] = ((arr[n,f]-bg)/np.exp(-k_pb*(f-start_frame)*dt))/(norm-bg) # Renormalized 
+                    arr_df[row,4+2*n_channels:4+3*n_channels] = (arr[n,f]/np.exp(-k_pb*(f-start_frame)*dt))/(quant_start) # Renormalized 
+                    arr_df[row,4+3*n_channels:4+4*n_channels] = bg/(norm-bg) # Renormalized 
+                    row = row + 1
+        # Create dataframe:
+ 
+        columns = ['Crop Row','Frame','Original Time (min)','Time (min)']
+        columns = columns + ch_names_full
+        df=pd.DataFrame(arr_df, columns = columns)
+        df_filt = df[df[ch_names[0]]!=ignore]  # filter out the empty crops without particles
         df_filt['Expt.'] = exp
         df_filt['Rep.'] = replicate
         df_filt['File'] = file
@@ -735,34 +811,48 @@ Bins columns in a crop array so that rows so they correspond to the same time (w
             
     def plot_array_avg_row(self, arr,**kwargs):
         """
-Returns a max-z projected single row crop array that represents the average row of arr. Optional arguments: (1) xlim = [start,stop] is a list that specifies the what frame to start and stop; (2) dx is the frame step size; (3) fig_size is a tuple that specifies the dimensions of the output image, e.g. (3.5,1); (4) int_range is a list of pairs that specify intensity limits, e.g. for a 2-channel image int_range = [[0,1000],[0,1000]]; (5) out_file is the name of the output .png output file to which image is saved.
+Returns a max-z projected single row crop array that represents the average row of arr. Optional arguments: (1) xlim = [start,stop] is a list that specifies the what frame to start and stop; (2) dx is the frame step size; (3) fig_size is a tuple that specifies the dimensions of the output image, e.g. (3.5,1); (4) int_range is a list of pairs that specify intensity limits, e.g. for a 2-channel image int_range = [[0,1000],[0,1000]]; (5) out_file is the name of the output .png output file to which image is saved; (6) ignore_val is the intensity value to ignore in the average (default 0).
         """
         # basic parameters
         n_channels = self.n_channels()
 
         xlim = kwargs.get('xlim', [0,self.n_frames()])
+        channel = kwargs.get('channel', -1)
         dx = kwargs.get('dx', 1)
         fig_size = kwargs.get('fig_size',(3.5,1))
         int_range = kwargs.get('int_range',[[0,64000] for c in np.arange(n_channels)])
         out_file = kwargs.get('out_file','test.png')
+        ignore_val = kwargs.get('ignore_val',0.)
 
         # make avg row
-        my_arr = np.ma.masked_equal(self.array_to_crops(arr),0)  # convert to N x T crops and mask zeros
+        my_arr = np.ma.masked_equal(self.array_to_crops(arr),ignore_val)  # convert to N x T crops and mask elements matching ignore_val
         my_avg_arr = self.crops_to_array(np.mean(my_arr[:,xlim[0]:xlim[1]:dx],axis=0))   # take column mean; covert back to crop array  
         my_avg_row = np.transpose(my_avg_arr,(1,0,2))       # transpose so shows up as a single row
+        print('test')
+        
+        # plot all channels as an array
+        if channel == -1:
+            #Now make figure
+            f, axes = plt.subplots(n_channels+1,1,figsize=fig_size)  # Create n_channel subplots (nchannel+1)x1 grid
+            c=axes.flatten()
+            for ch in np.arange(n_channels):
+                c[ch].imshow(np.clip(my_avg_row[:,:,ch],int_range[ch][0],int_range[ch][1]), cmap="gray")
+                c[ch].set_axis_off()
+            merge = np.moveaxis([np.clip(my_avg_row[:,:,ch],int_range[ch][0],
+                       int_range[ch][1])/(int_range[ch][1]-int_range[ch][0]) for ch in np.arange(n_channels)],0,-1)
+            c[-1].imshow((merge))  # Expects intensities between 0 and 1
+            c[-1].set_axis_off()
+            plt.savefig(out_file, format = 'png', dpi=300)
 
-        #Now make figure
-        f, axes = plt.subplots(n_channels+1,1,figsize=fig_size)  # Create n_channel subplots (nchannel+1)x1 grid
-        c=axes.flatten()
-        for ch in np.arange(n_channels):
-            c[ch].imshow(np.clip(my_avg_row[:,:,ch],int_range[ch][0],int_range[ch][1]), cmap="gray")
-            c[ch].set_axis_off()
-        merge = np.moveaxis([np.clip(my_avg_row[:,:,ch],int_range[ch][0],
-                    int_range[ch][1])/(int_range[ch][1]-int_range[ch][0]) for ch in np.arange(n_channels)],0,-1)
-        c[-1].imshow((merge))  # Expects intensities between 0 and 1
-        c[-1].set_axis_off()
-        plt.savefig(out_file, format = 'png', dpi=300)
-
+        if channel == 0:
+            #Now make figure
+            f, axes = plt.subplots(1,1,figsize=fig_size)  # Create n_channel subplots (nchannel+1)x1 grid
+            c=axes.flatten()           
+            c[0].imshow(np.clip(my_avg_row[:,:,0],int_range[0][0],int_range[0][1]), cmap="gray")
+            c[0].set_axis_off()
+            plt.savefig(out_file, format = 'png', dpi=300)
+            
+            
     def plot_array(self, arr, **kwargs):
         """
         Plots a crop array that represents the average row of arr. Optional arguments: (1) xlim = [start, stop] is a list that specifies the what frame to start and stop; (2) dx is the frame step size; (3) fig_size is a tuple that specifies the dimensions of the output image, e.g. (3.5,1); (4) int_range is a list of pairs that specify intensity limits, e.g. for a 2-channel image int_range = [[0,1000],[0,1000]]; (5) out_file is the name of the output .png output file to which image is saved. 
@@ -950,21 +1040,18 @@ def create_track_array_video_old(output_directory, output_filename, video_3D, tr
             metadata={'spacing':z_pixel_size,'unit':'nm'})  # store z spaxing in nm and set units to nm
     
 def create_track_array_video(output_directory, output_filename, video_3D, tracks, crop_pad, xy_pixel_size, z_pixel_size,**kwargs):
-    """Creates and saves a track array video at output_direction/output_filename from a 3D tif video (video_3D) and corresponding track dataframe (tracks). crop_pad is the effective radius of crops in the generated track array. xy_pixel_size and z_pixel_size are included to generate an imagej tif file with metadata containing the resolution of the image. An optional argument, homography, is a homography matrix that shifts red (channel 0) pixels so they align with other channels. This will correct for shifts in red and green channels."""
+    """Creates and saves a track array video at output_direction/output_filename from a 3D tif video (video_3D) and corresponding track dataframe (tracks). crop_pad is the effective radius of crops in the generated track array. xy_pixel_size and z_pixel_size are included to generate an imagej tif file with metadata containing the resolution of the image. Optional arguments: (1) track_ch is the channel used for tracking, 0 = red, 1 = green, 2 = blue; default is 0 (red) (2) homography is a homography matrix that shifts the track_ch pixels so they align with other channels. This will correct for shifts in red and green channels."""
+    # Get track_ch; default is 0
+    track_ch = kwargs.get('track_ch',0)
     # Get homography matrix; default is identity matrix
     homography = kwargs.get('homography', np.eye(3))
-    # Get dimensions...usually t, z, y, x, c. However, can be tricky if channels in a weird place. I assume
-    # the smallest dimension is channels and remove it. I then assum remaining is t,z,y,x.  
+    # Get dimensions...MUST BE T, Z, Y, X, C or, if only single channel image, then MUST BE T, Z, Y, X  
     dims = list(video_3D.shape)
     if len(dims) == 4:     # check if just a single channel video
         n_channels = 1
         n_frames, z_slices, height_y, width_x = dims
     else:
-        n_channels = min(dims)
-        n_channels_index = dims.index(n_channels)   # find index of n_channels, which is assumed to be smallest dimension 
-        dims.remove(n_channels)    
-        video_3D = np.moveaxis(video_3D,n_channels_index,-1)  # move channels to last dimension of array (assumed by napari)
-        n_frames, z_slices, height_y, width_x = dims
+        n_frames, z_slices, height_y, width_x, n_channels = dims
     # Get unique tracks
     my_track_ids = tracks.TRACK_ID.unique()
     n_tracks = my_track_ids.size
@@ -982,15 +1069,26 @@ def create_track_array_video(output_directory, output_filename, video_3D, tracks
         my_y = np.zeros((n_channels, my_track['POSITION_Y'].size))
         
         for ch in np.arange(n_channels):  
-            if ch == 0:  # don't correct channel 0 (red channel)
-                my_x[ch] = my_track['POSITION_X'].round(0).values.astype(int)
-                my_y[ch] = my_track['POSITION_Y'].round(0).values.astype(int)
-            else:   # correct other channels using homography (since green/blue are image on same camera)
-                temp = [list(np.dot(homography,np.array([pos[0],pos[1],1]))[0:2]) 
-                        for pos in my_track[['POSITION_X','POSITION_Y']].values]
-                my_x[ch], my_y[ch] = np.array(temp).T
-                my_x[ch] = my_x[ch].round(0).astype(int)
-                my_y[ch] = my_y[ch].round(0).astype(int)
+            if track_ch == 0:  # assume track channel is red, then keep red centered and change blue and green channels
+                if ch == 0: 
+                    my_x[ch] = my_track['POSITION_X'].round(0).values.astype(int)
+                    my_y[ch] = my_track['POSITION_Y'].round(0).values.astype(int)
+                else:   # correct other channels using homography (since green/blue are image on same camera)
+                    temp = [list(np.dot(homography,np.array([pos[0],pos[1],1]))[0:2]) 
+                            for pos in my_track[['POSITION_X','POSITION_Y']].values]
+                    my_x[ch], my_y[ch] = np.array(temp).T
+                    my_x[ch] = my_x[ch].round(0).astype(int)
+                    my_y[ch] = my_y[ch].round(0).astype(int)
+            if track_ch != 0:  # assume track channel is green/blue, then keep green/blue centered and change red
+                if ch != 0: 
+                    my_x[ch] = my_track['POSITION_X'].round(0).values.astype(int)
+                    my_y[ch] = my_track['POSITION_Y'].round(0).values.astype(int)
+                else:   # correct other channels using homography (since green/blue are image on same camera)
+                    temp = [list(np.dot(homography,np.array([pos[0],pos[1],1]))[0:2]) 
+                            for pos in my_track[['POSITION_X','POSITION_Y']].values]
+                    my_x[ch], my_y[ch] = np.array(temp).T
+                    my_x[ch] = my_x[ch].round(0).astype(int)
+                    my_y[ch] = my_y[ch].round(0).astype(int)
 
         ## Assign crops        
         t_ind = 0
@@ -1006,7 +1104,7 @@ def create_track_array_video(output_directory, output_filename, video_3D, tracks
     my_crops_all = np.moveaxis(my_crops_all.astype(np.int16),-1,1)   # move channels dim from the end to second for imagej 
 
     # write out track array file to directory
-    io.imsave(output_directory + output_filename,
+    io.imsave(os.path.join(output_directory,output_filename),
             my_crops_all, imagej=True,
             resolution=(1/xy_pixel_size,1/xy_pixel_size),  # store x and y resolution in pixels/nm
             metadata={'spacing':z_pixel_size,'unit':'nm'})  # store z spaxing in nm and set units to nm
@@ -1081,7 +1179,7 @@ def create_particle_array_video(output_directory, output_filename, video_3D, par
     my_crops_all = np.moveaxis(my_crops_all.astype(np.int16),-1,1)   # move channels dim from the end to second for imagej 
 
     # save to file
-    io.imsave(output_directory + output_filename,
+    io.imsave(os.path.join(output_directory, output_filename),
             my_crops_all, imagej=True,
             resolution=(1/xy_pixel_size,1/xy_pixel_size),  # store x and y resolution in pixels/nm
             metadata={'spacing':z_pixel_size,'unit':'nm'})  # store z spaxing in nm and set units to nm
